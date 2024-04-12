@@ -5,6 +5,7 @@ import torch
 import math
 from collections import namedtuple, deque
 import random
+import matplotlib.pyplot as plt
 
 Transition = namedtuple('Transition',('state', 'action', 'next_state', 'reward'))
 
@@ -53,7 +54,7 @@ class RLAgent:
         else:
             return self.action_value_function(torch.tensor(s, device=self.device, dtype=torch.float32)).unsqueeze(0).max(1).indices.view(1,1)
 
-    def decayEpsilon(self, episodes_done):
+    def decayEpsilonAndTau(self):
         self.epsilon = max(self.epsilon_end, self.epsilon*self.epsilon_decay)
         self.tau = min(0.9, self.tau*(2-self.epsilon_decay))
 
@@ -89,8 +90,9 @@ class RLAgent:
 def trainAgent(agent, num_episodes, env):
     rewards_over_episodes = []
     losses_over_updates = []
+    average_rewards = []
     total_steps = 0
-    for i in range(int(num_episodes)):
+    for i in range(num_episodes):
         obs, info = env.reset()
         rewards_in_episode = []
         done = False
@@ -112,47 +114,59 @@ def trainAgent(agent, num_episodes, env):
             if (total_steps%4)==0 and len(agent.transitions)>=agent.batch_size:
                 losses_over_updates.append(agent.update())
         rewards_over_episodes.append(rewards_in_episode)
-        agent.decayEpsilon(i+1)
+        agent.decayEpsilonAndTau()
         if i and i%100 == 0:
             print("Average loss in last 100 updates is: {}".format(np.mean(losses_over_updates[-100:])))
             rewards = 0
             for Rs in rewards_over_episodes[-100:]:
                 rewards += np.sum(Rs)
             rewards /= 100
+            average_rewards.append(rewards)
             print("Average Total reward for last 100 episodes is: {}".format(rewards))
+    return rewards_over_episodes
 
 
 
 def main():
     env = gym.make("LunarLander-v2", continuous=False)
     agent = RLAgent()
-    trainAgent(agent, 5e3, env)
+    num_episodes = 2500
+    rewards_data = trainAgent(agent, num_episodes, env)
     env.close()
     torch.save(agent.action_value_function.state_dict(),"offPolicy_Sarsa0_QFunc.pth")
-    env = gym.make("LunarLander-v2", render_mode="human", continuous=False)
-    observation, info = env.reset()
-    for _ in range(1000):
-        action = agent.getAction(env, observation)
-        # action = heuristic(env, observation)
-        observation, reward, terminated, truncated, info = env.step(action.item())
-        if terminated or truncated:
-            observation, info = env.reset()
-    env.close()
-
-def testModel(path):
-    agent = RLAgent()
-    agent.action_value_function.load_state_dict(torch.load(path))
-    agent.epsilon = agent.epsilon_end
     env = gym.make("LunarLander-v2", render_mode="human", continuous=False)
     for _ in range(10):
         observation, info = env.reset()
         done = False
         while not done:
             action = agent.getAction(env, observation)
-            # action = heuristic(env, observation)
+            observation, reward, terminated, truncated, info = env.step(action.item())
+            done = terminated or truncated
+    env.close()
+
+    total_reward_per_episode = [np.sum(episode_rewards) for episode_rewards in rewards_data]
+    average_rewards = [(i,np.mean(total_reward_per_episode[i:i+100])) for i in range(0,num_episodes,100)]
+    plt.figure()
+    plt.plot(total_reward_per_episode)
+    plt.plot(*zip(*average_rewards))
+    plt.savefig("rewards_onPolicy_Sarsa0_QLearning.png")
+    plt.show()
+    return agent
+
+def testModel(path):
+    agent = RLAgent()
+    agent.action_value_function.load_state_dict(torch.load(path))
+    agent.epsilon = 0
+    env = gym.make("LunarLander-v2", render_mode="human", continuous=False)
+    for _ in range(10):
+        observation, info = env.reset()
+        done = False
+        while not done:
+            action = agent.getAction(env, observation)
             observation, reward, terminated, truncated, info = env.step(action.item())
             done = terminated or truncated
     env.close()
 
 if __name__ == "__main__":
-    testModel("offPolicy_Sarsa0_QFunc.pth")
+    testModel("offPolicy_Sarsa0_QFunc1.pth")
+    # main()
